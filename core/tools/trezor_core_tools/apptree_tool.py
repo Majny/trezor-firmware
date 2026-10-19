@@ -151,26 +151,34 @@ def create_app_indices(out_dir: Path) -> None:
             with open(file, "rb") as f:
                 app_json = json.load(f)
                 assert app_json["id"] == str(dir.relative_to(out_dir))
+                payload = b"".join(base64_decode(x) for x in app_json["chunks"])
+                raw_header = base64_decode(app_json["header"])
+                # Reconstruct app image from raw data, do not use human-readable part of the app json
+                image = AppImage.parse(raw_header + payload)
+                header = image.header
+
+                # TODO moce checks to separate function
+                chunks = image.chunks()
+                for idx, (ch, ch_hash) in enumerate(chunks):
+                    assert ch_hash.hex() == app_json["chunk_hashes"][idx]
+                    assert base64_encode(ch) == app_json["chunks"][idx]
+
                 app_description = {
                     "abi": {
-                        "platform": app_json["target_arch"],
-                        "version": app_json["abi_version"],
+                        "platform": get_target_arch(header.target_arch),
+                        "version": header.abi_version,
                     },
-                    "model": app_json["model"],
-                    "language": app_json["language"],
+                    "model": header.model,
+                    "language": get_language(header.language),
                     "file": str(file.relative_to(dir)),
                     "sha256": hashlib.file_digest(f, "sha256").hexdigest(),
-                    "fingerprint": sha256(
-                        base64_decode(app_json["header"])
-                    ).hexdigest(),
+                    "fingerprint": header.fingerprint().hex(),
                 }
                 releases[
                     (
-                        format_version_str_to_tuple(app_json["version"]),
-                        format_version_str_to_tuple(app_json["sdk_version"]),
-                        get_serialized_rootpacket(
-                            out_dir, dir, ring=app_json["app_ring"]
-                        ),
+                        header.version,
+                        header.sdk_version,
+                        get_serialized_rootpacket(out_dir, dir, ring=header.app_ring),
                     )
                 ].append(app_description)
 
