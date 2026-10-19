@@ -321,10 +321,11 @@ else:
             self.msg = msg
 
     async def _read_share() -> str:
-        from apps.debug import n1w1_mock
+        from trezor.ui.layouts.progress import progress
 
-        with n1w1_mock.ctx as ctx:
-            # returns `None` on cancellation or retriable error.
+        import apps.management.n1w1.context as n1w1
+
+        with n1w1.ctx as ctx:
             await ctx.confirm_connect(
                 title=TR.recovery__title,
                 description=TR.n1w1__hold_next,
@@ -333,11 +334,21 @@ else:
             )
             # continue N1W1 communication (the tag is connected)
 
-            # TODO(N1W1): animate during read?
-            if (blob := await ctx.read(key="mnemonic")) is None:
-                raise RetryRead(TR.n1w1__err_empty)
+            progress_obj = progress(
+                title=TR.n1w1__reading, description=TR.progress__please_wait
+            )
+            progress_obj.start()
 
-            # TODO(N1W1): use protobuf?
+            try:
+                blob = await ctx.read_share(
+                    progress_cb=n1w1.time_based_progress(progress_obj)
+                )
+                if blob is None:
+                    raise RetryRead(TR.n1w1__err_empty)
+                progress_obj.report(1000)
+            finally:
+                progress_obj.stop()
+
             blob = bytes(blob)
             try:
                 return blob.decode()
@@ -397,7 +408,9 @@ else:
             backup_type = self.slip39_state and self.slip39_state[1]
             share_words = share.split(" ")
 
-            progress_obj = progress(description=TR.n1w1__reading)
+            progress_obj = progress(
+                title=TR.progress__please_wait, description=TR.n1w1__reading
+            )
             progress_obj.start()
 
             try:
