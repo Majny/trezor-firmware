@@ -80,7 +80,6 @@ def _menu_params(
     `init_submenu_idx` of None means "leave the menu where it is" on a refresh,
     and "open at the root" when constructing.
     """
-    from trezor.wire.thp import paired_cache
 
     is_initialized = storage_device.is_initialized()
     led_configurable = is_initialized and utils.USE_RGB_LED
@@ -103,8 +102,22 @@ def _menu_params(
     connected_idx = _find_device(connected_addr, bonds) if ble_enabled else None
     if __debug__:
         log.debug(__name__, "connected: %s (%s)", connected_addr, connected_idx)
-    hostname_map = {e.mac_addr: e for e in paired_cache.load()}
-    paired_devices = [_get_hostinfo(bond, hostname_map) for bond in bonds]
+    # hostname_map = {e.mac_addr: e for e in paired_cache.load()}
+    # paired_devices = [_get_hostinfo(bond, hostname_map) for bond in bonds]
+    paired_devices = [
+        (name, (name, ""))
+        for name in [
+            "ReadSeedMeta",
+            "WriteSeedMeta",
+            "ReadSeed",
+            "WriteSeed",
+            "Wipe",
+            "SetPin",
+            "ReadPinCounter",
+            "ReadSuccessLog",
+            "ReadFailureLogs",
+        ]
+    ]
 
     # versions used in "About" screen, emulator uses dummy versions for fixtures
     if utils.EMULATOR or not utils.USE_NRF:
@@ -288,13 +301,69 @@ async def handle_UnpairAllDevices() -> None:
 
 
 async def handle_UnpairDevice(index: int) -> None:
-    from trezor.messages import BleUnpair
+    import trezornfc as nfc
+    from trezor.ui.layouts.progress import progress
 
-    from apps.management.ble.unpair import unpair
+    from apps.management.n1w1.context import ctx, time_based_progress
 
-    bonds = ble.get_bonds()
-    if index < len(bonds):
-        await unpair(BleUnpair(addr=bonds[index]))
+    ins, data = {
+        0: (nfc.READ_SEED_METADATA, None),
+        1: (nfc.WRITE_SEED_METADATA, bytes(256)),
+        2: (nfc.READ_SEED, None),
+        3: (nfc.WRITE_SEED, bytes(range(256))),
+        4: (nfc.WIPE, None),
+        5: (nfc.SET_PIN, "1234"),
+        6: (nfc.READ_PIN_COUNTER, None),
+        7: (nfc.READ_SUCCESS_LOG, None),
+        8: (nfc.READ_FAILURE_LOGS, None),
+    }[index]
+
+    done = False
+    while not done:
+        try:
+            with ctx as ctx:
+                progress_obj = progress(
+                    description=TR.progress__please_wait, title=TR.n1w1__reading
+                )
+                await ctx.confirm_connect(
+                    title="NFC test",
+                    description="Tap the card",
+                    button="waiting",
+                    br_name="nfc_test",
+                    pin=(None if ins == nfc.WIPE else ""),
+                )
+                do_noise = ins in [
+                    nfc.WRITE_SEED_METADATA,
+                    nfc.READ_SEED,
+                    nfc.WRITE_SEED,
+                    nfc.WIPE,
+                    nfc.SET_PIN,
+                ]
+                progress_obj.start()
+                cb = time_based_progress(progress_obj)
+                if do_noise:
+                    await ctx._ensure_secure_channel(cb)
+                response = await ctx._command(ins, data, cb)
+            done = True
+        except nfc.NfcCommandFailed as e:
+            log.exception(__name__, e)
+            response = f"{e.args[0]:04x}: {e.args[1]}"
+        except Exception as e:
+            log.exception(__name__, e)
+            response = f"{e.__class__.__name__}: {str(e)}"
+        finally:
+            progress_obj.stop()
+        with trezorui_api.confirm_value(
+            title=f"NFC response ({len(response)} B)"
+            if (done and response)
+            else "NFC response",
+            value=response[:81] if response else "OK (no data)",
+            is_data=True,
+            verb=None if done else "Retry",
+            cancel=not done,
+            description=None,
+        ) as layout:
+            await raise_if_not_confirmed(layout, "nfc")
 
 
 async def handle_ToggleBluetooth() -> None:
