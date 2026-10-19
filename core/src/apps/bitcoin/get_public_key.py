@@ -162,8 +162,8 @@ def _xpub_descriptor(
     # always ignore script-dependent xpub magic for descriptors
     xpub = node.serialize_public(xpub_magic)
 
-    path = paths.address_n_to_str(address_n).replace("'", "h")
-    inner = f"[{fingerprint:08x}{path[1:]}]{xpub}/<0;1>/*"
+    path = paths.address_n_to_str(address_n, f"{fingerprint:08x}").replace("'", "h")
+    inner = f"[{path}]{xpub}/<0;1>/*"
     descriptor = fmt.format(inner)
     checksum = descriptor_checksum(descriptor)
     return f"{descriptor}#{checksum}"
